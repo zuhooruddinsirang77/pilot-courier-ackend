@@ -3,7 +3,6 @@ import Shipment from '../models/Shipment';
 import netparcelService from '../services/netparcel.service';
 import emailService from '../services/email.service';
 import logger from '../utils/logger';
-import { v4 as uuidv4 } from 'uuid';
 
 const generateShipmentNumber = (): string => {
   const prefix = 'PC';
@@ -12,99 +11,140 @@ const generateShipmentNumber = (): string => {
   return `${prefix}-${timestamp}-${random}`;
 };
 
-const tagRates = (rates: any[]) => {
-  if (!rates.length) return rates;
-
-  const sorted = [...rates].sort((a, b) => a.TotalCharge - b.TotalCharge);
-  const cheapest = sorted[0];
-  const fastest = rates.reduce((a, b) => (a.TransitDays < b.TransitDays ? a : b));
-
-  return rates.map((rate) => {
-    const totalCharge = rate.TotalCharge;
-    const speed = rate.TransitDays;
-    const valueScore = totalCharge / Math.max(speed, 1);
-    const bestValue = rates.reduce((a, b) => (a.TotalCharge / Math.max(a.TransitDays, 1) < b.TotalCharge / Math.max(b.TransitDays, 1) ? a : b));
-
-    return {
-      carrierId: rate.CarrierId,
-      carrierName: rate.CarrierName,
-      serviceCode: rate.ServiceCode,
-      serviceName: rate.ServiceName,
-      totalCharge: rate.TotalCharge,
-      currency: rate.Currency || 'CAD',
-      transitDays: rate.TransitDays,
-      estimatedDelivery: rate.EstimatedDelivery,
-      isCheapest: rate.ServiceCode === cheapest.ServiceCode && rate.CarrierId === cheapest.CarrierId,
-      isFastest: rate.ServiceCode === fastest.ServiceCode && rate.CarrierId === fastest.CarrierId,
-      isBestValue: rate.ServiceCode === bestValue.ServiceCode && rate.CarrierId === bestValue.CarrierId,
-    };
-  });
+// netParcel total_price is in cents (e.g. "3400" = $34.00)
+const parseNpPrice = (raw: string | number): number => {
+  const n = typeof raw === 'string' ? parseFloat(raw) : raw;
+  return n > 1000 ? parseFloat((n / 100).toFixed(2)) : n;
 };
 
-// GET /api/shipments/rates
+const calcTransitDays = (minDate?: string, maxDate?: string): number => {
+  const dateStr = maxDate || minDate;
+  if (!dateStr) return 5;
+  const delivery = new Date(dateStr);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diff = Math.ceil((delivery.getTime() - today.getTime()) / 86400000);
+  return Math.max(diff, 1);
+};
+
+const tagRates = (rates: any[]) => {
+  if (!rates.length) return rates;
+  const cheapest = [...rates].sort((a, b) => a.totalCharge - b.totalCharge)[0];
+  const fastest = rates.reduce((a, b) => (a.transitDays < b.transitDays ? a : b));
+  const bestValue = rates.reduce((a, b) =>
+    a.totalCharge / Math.max(a.transitDays, 1) < b.totalCharge / Math.max(b.transitDays, 1) ? a : b
+  );
+  return rates.map((r) => ({
+    ...r,
+    isCheapest: r.serviceCode === cheapest.serviceCode,
+    isFastest: r.serviceCode === fastest.serviceCode,
+    isBestValue: r.serviceCode === bestValue.serviceCode,
+  }));
+};
+
+// ── POST /api/shipments/rates ────────────────────────────────────────────────
 export const getRates = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const {
       originPostal, destinationPostal,
-      originCity, destinationCity,
-      originProvince, destinationProvince,
+      originCity = '', destinationCity = '',
+      originProvince = '', destinationProvince = '',
       originCountry = 'CA', destinationCountry = 'CA',
-      weight, weightUnit = 'kg',
-      length, width, height, dimensionUnit = 'cm',
-      shipmentType = 'domestic',
+      originResidential = false, destinationResidential = false,
+      weight, weightUnit = 'lbs',
+      length, width, height, dimensionUnit = 'in',
+      description = 'Package',
+      insuranceAmount = 0,
+      specialHandling = false,
     } = req.body;
 
-    const rateRequest = {
-      Origin: {
-        Name: 'Shipper',
-        Address1: '1 Main St',
-        City: originCity || '',
-        Province: originProvince || '',
-        PostalCode: originPostal,
-        Country: originCountry,
-        Phone: '0000000000',
+    const uom: 'I' | 'M' = weightUnit === 'lbs' ? 'I' : 'M';
+
+    const ratePayload = {
+      rate: {
+        origin: {
+          country: originCountry,
+          postal_code: originPostal,
+          province: originProvince,
+          city: originCity,
+          name: 'Shipper',
+          address1: '1 Main St',
+          phone: null,
+          address2: null,
+          address3: null,
+          fax: null,
+          address_type: originResidential ? 'residential' : 'business',
+          company_name: null,
+        },
+        destination: {
+          country: destinationCountry,
+          postal_code: destinationPostal,
+          province: destinationProvince,
+          city: destinationCity,
+          name: 'Recipient',
+          address1: '1 Main St',
+          phone: null,
+          address2: null,
+          address3: null,
+          fax: null,
+          address_type: destinationResidential ? 'residential' : 'business',
+          company_name: null,
+        },
+        packaging_information: {
+          packaging_type: 'My Packaging',
+          uom,
+          packages: [{
+            length: parseFloat(length),
+            width: parseFloat(width),
+            height: parseFloat(height),
+            weight: parseFloat(weight),
+            insurance_amount: parseFloat(insuranceAmount) || 0,
+            description: description || 'Package',
+            special_handling: !!specialHandling,
+          }],
+        },
       },
-      Destination: {
-        Name: 'Recipient',
-        Address1: '1 Main St',
-        City: destinationCity || '',
-        Province: destinationProvince || '',
-        PostalCode: destinationPostal,
-        Country: destinationCountry,
-        Phone: '0000000000',
-      },
-      Parcels: [{
-        Weight: parseFloat(weight),
-        WeightUnit: weightUnit,
-        Length: parseFloat(length),
-        Width: parseFloat(width),
-        Height: parseFloat(height),
-        DimensionUnit: dimensionUnit,
-        Description: 'Package',
-        Quantity: 1,
-      }],
     };
 
-    let rawRates;
+    let npRates;
     try {
-      rawRates = await netparcelService.getRates(rateRequest);
+      npRates = await netparcelService.getRates(ratePayload);
+      logger.info(`netParcel returned ${npRates.length} rates`);
+      if (!npRates.length) {
+        logger.warn('No live rates returned, falling back to mock rates');
+        npRates = netparcelService.getMockRates(parseFloat(weight));
+      }
     } catch (err) {
-      logger.warn('Live API failed, using mock rates:', err);
-      rawRates = netparcelService.getMockRates(originPostal, destinationPostal, parseFloat(weight));
+      logger.warn('Live netParcel rates failed, using mock rates:', err);
+      npRates = netparcelService.getMockRates(parseFloat(weight));
     }
 
-    const rates = tagRates(rawRates);
+    const normalized = npRates.map((r) => ({
+      carrierId: r.service_code,
+      carrierName: r.service_name.split(' ')[0],
+      serviceCode: r.service_code,
+      serviceName: r.service_name,
+      totalCharge: parseNpPrice(r.total_price),
+      currency: r.currency || 'CAD',
+      transitDays: calcTransitDays(r.min_delivery_date, r.max_delivery_date),
+      estimatedDelivery: (r.max_delivery_date || r.min_delivery_date || '').split(' ')[0],
+    }));
 
+    const rates = tagRates(normalized);
     res.json({ success: true, rates, count: rates.length });
   } catch (error) {
     next(error);
   }
 };
 
-// POST /api/shipments/book
+// ── POST /api/shipments/book ─────────────────────────────────────────────────
 export const bookShipment = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { shipper, recipient, parcels, selectedRate, shipmentType, guestEmail, guestPhone } = req.body;
+    const {
+      shipper, recipient, parcels, selectedRate,
+      shipmentType, guestEmail, guestPhone,
+      pickupDetails, specialServices, references,
+    } = req.body;
     const userId = (req as any).user?.userId;
 
     const shipmentNumber = generateShipmentNumber();
@@ -119,6 +159,9 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
       parcels,
       selectedRate,
       shipmentType,
+      pickupDetails,
+      specialServices,
+      references,
       status: 'pending_payment',
       payment: {
         amount: selectedRate.totalCharge,
@@ -138,7 +181,7 @@ export const bookShipment = async (req: Request, res: Response, next: NextFuncti
   }
 };
 
-// POST /api/shipments/:id/confirm-payment
+// ── POST /api/shipments/:id/confirm-payment ──────────────────────────────────
 export const confirmPayment = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
@@ -153,42 +196,68 @@ export const confirmPayment = async (req: Request, res: Response, next: NextFunc
     shipment.payment.paidAt = new Date();
     shipment.status = 'paid';
 
-    // Try to create label via NetParcel
     try {
-      const netparcelShipment = await netparcelService.createShipment({
-        Origin: {
-          Name: shipment.shipper.name,
-          Company: shipment.shipper.company,
-          Address1: shipment.shipper.street,
-          City: shipment.shipper.city,
-          Province: shipment.shipper.province,
-          PostalCode: shipment.shipper.postalCode,
-          Country: shipment.shipper.country,
-          Phone: shipment.shipper.phone,
-        },
-        Destination: {
-          Name: shipment.recipient.name,
-          Company: shipment.recipient.company,
-          Address1: shipment.recipient.street,
-          City: shipment.recipient.city,
-          Province: shipment.recipient.province,
-          PostalCode: shipment.recipient.postalCode,
-          Country: shipment.recipient.country,
-          Phone: shipment.recipient.phone,
-        },
-        Parcels: shipment.parcels,
-        ServiceCode: shipment.selectedRate.serviceCode,
-        CarrierId: shipment.selectedRate.carrierId,
-      });
+      const pd = shipment.pickupDetails;
+      const ss = shipment.specialServices || {};
+      const shipDate = pd?.pickupDate || new Date().toISOString().split('T')[0];
 
-      shipment.netparcelShipmentId = netparcelShipment.ShipmentId;
-      shipment.trackingNumber = netparcelShipment.TrackingNumber;
-      shipment.labelUrl = netparcelShipment.LabelUrl;
-      shipment.status = 'label_generated';
+      const pickupBlock = pd?.method === 'schedule_pickup' ? {
+        location: pd.location || 'Front Door',
+        instructions: pd.instructions || '',
+        ready_time: { ready_hour: pd.readyHour || '09', ready_min: pd.readyMin || '00' },
+        close_time: { close_hour: pd.closeHour || '17', close_min: pd.closeMin || '00' },
+      } : undefined;
 
-      if (netparcelShipment.ShipmentId) {
-        const labelBase64 = await netparcelService.getLabel(netparcelShipment.ShipmentId);
-        shipment.labelBase64 = labelBase64;
+      const refs = (shipment.references || []).map((r) => ({
+        reference_name: r.referenceName,
+        reference_value: r.referenceValue,
+      }));
+      refs.unshift({ reference_name: 'Order', reference_value: shipment.shipmentNumber });
+
+      const shipPayload = {
+        ship: {
+          origin: {
+            ...netparcelService.buildAddress(shipment.shipper),
+            address_type: shipment.shipper.isResidential ? 'residential' : null,
+          },
+          destination: {
+            ...netparcelService.buildAddress(shipment.recipient),
+            address_type: shipment.recipient.isResidential ? 'residential' : null,
+            email: shipment.recipient.email,
+            send_email_confirmation: !!shipment.recipient.email,
+          },
+          service: {
+            service_code: parseInt(shipment.selectedRate.serviceCode, 10) || shipment.selectedRate.serviceCode,
+            service_name: shipment.selectedRate.serviceName,
+          },
+          ship_date: shipDate,
+          pick_up: pickupBlock,
+          special_services: {
+            saturday_delivery: ss.saturdayDelivery || false,
+            signature_required: ss.signatureRequired || false,
+            adult_signature: ss.adultSignature || false,
+            hold_for_pickup: ss.holdForPickup || false,
+            inside_pickup: ss.insidePickup || false,
+            inside_delivery: ss.insideDelivery || false,
+            tailgate_pickup: ss.tailgatePickup || false,
+            tailgate_delivery: ss.tailgateDelivery || false,
+          },
+          packaging_information: netparcelService.buildPackagingInformation(shipment.parcels),
+          references: refs.slice(0, 3),
+          generate_label: true,
+        },
+      };
+
+      const npShipment = await netparcelService.createShipment(shipPayload);
+
+      shipment.netparcelOrderId = npShipment.order_id;
+      shipment.trackingNumber = npShipment.master_tracking_num;
+      shipment.labelUrl = npShipment.tracking_url;
+      shipment.status = pickupBlock ? 'pickup_scheduled' : 'label_generated';
+
+      const labelDoc = npShipment.documents?.find((d: any) => d.document_name === 'labels');
+      if (labelDoc?.base64_encoded_string) {
+        shipment.labelBase64 = labelDoc.base64_encoded_string;
       }
     } catch (labelErr) {
       logger.warn('Label generation failed, shipment still marked as paid:', labelErr);
@@ -198,7 +267,7 @@ export const confirmPayment = async (req: Request, res: Response, next: NextFunc
 
     await shipment.save();
 
-    const contactEmail = shipment.guestEmail || '';
+    const contactEmail = shipment.guestEmail || shipment.recipient.email || '';
     if (contactEmail) {
       await emailService.sendBookingConfirmation(contactEmail, shipment, shipment.guestPhone);
     }
@@ -219,7 +288,7 @@ export const confirmPayment = async (req: Request, res: Response, next: NextFunc
   }
 };
 
-// GET /api/shipments/track/:trackingNumber
+// ── GET /api/shipments/track/:trackingNumber ─────────────────────────────────
 export const trackShipment = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { trackingNumber } = req.params;
@@ -227,9 +296,15 @@ export const trackShipment = async (req: Request, res: Response, next: NextFunct
     const shipment = await Shipment.findOne({ trackingNumber }).lean();
 
     let liveTracking = null;
-    if (shipment?.netparcelShipmentId) {
+    if (shipment?.netparcelOrderId) {
       try {
-        liveTracking = await netparcelService.trackShipment(trackingNumber);
+        const order = await netparcelService.getOrder(shipment.netparcelOrderId, trackingNumber);
+        liveTracking = {
+          status: order?.status?.status_name,
+          carrier: order?.service_name,
+          trackingUrl: order?.tracking_url,
+          charges: order?.charges,
+        };
       } catch {
         logger.warn('Live tracking unavailable for:', trackingNumber);
       }
@@ -243,10 +318,11 @@ export const trackShipment = async (req: Request, res: Response, next: NextFunct
       success: true,
       tracking: {
         trackingNumber,
-        status: shipment?.status || 'unknown',
-        carrier: shipment?.selectedRate?.carrierName,
+        status: liveTracking?.status || shipment?.status || 'unknown',
+        carrier: liveTracking?.carrier || shipment?.selectedRate?.carrierName,
         serviceName: shipment?.selectedRate?.serviceName,
         estimatedDelivery: shipment?.selectedRate?.estimatedDelivery,
+        trackingUrl: liveTracking?.trackingUrl || shipment?.labelUrl,
         shipper: shipment ? { city: shipment.shipper.city, province: shipment.shipper.province, country: shipment.shipper.country } : null,
         recipient: shipment ? { city: shipment.recipient.city, province: shipment.recipient.province, country: shipment.recipient.country } : null,
         statusHistory: shipment?.statusHistory || [],
@@ -258,7 +334,49 @@ export const trackShipment = async (req: Request, res: Response, next: NextFunct
   }
 };
 
-// POST /api/shipments/:id/cancel
+// ── GET /api/shipments/:id/label ─────────────────────────────────────────────
+export const downloadLabel = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const userId = (req as any).user?.userId;
+
+    const shipment = await Shipment.findById(id);
+    if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+
+    if (shipment.userId && userId && shipment.userId.toString() !== userId) {
+      return res.status(403).json({ success: false, message: 'Unauthorized.' });
+    }
+
+    // If we stored the base64 label, re-fetch from netParcel order if missing
+    if (!shipment.labelBase64 && shipment.netparcelOrderId) {
+      try {
+        const order = await netparcelService.getOrder(shipment.netparcelOrderId, shipment.trackingNumber);
+        const labelDoc = order?.documents?.find((d: any) => d.document_name === 'labels');
+        if (labelDoc?.base64_encoded_string) {
+          shipment.labelBase64 = labelDoc.base64_encoded_string;
+          await shipment.save();
+        }
+      } catch (err) {
+        logger.warn('Failed to re-fetch label from netParcel:', err);
+      }
+    }
+
+    if (!shipment.labelBase64) {
+      return res.status(404).json({ success: false, message: 'Label not yet available for this shipment.' });
+    }
+
+    res.json({
+      success: true,
+      label: `data:application/pdf;base64,${shipment.labelBase64}`,
+      trackingNumber: shipment.trackingNumber,
+      shipmentNumber: shipment.shipmentNumber,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ── POST /api/shipments/:id/cancel ───────────────────────────────────────────
 export const cancelShipment = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
@@ -277,9 +395,16 @@ export const cancelShipment = async (req: Request, res: Response, next: NextFunc
       return res.status(400).json({ success: false, message: `Cannot cancel a shipment with status: ${shipment.status}.` });
     }
 
+    if (shipment.netparcelOrderId) {
+      try {
+        await netparcelService.cancelShipment(shipment.netparcelOrderId);
+      } catch (err) {
+        logger.warn('netParcel carrier cancellation failed (continuing with internal cancel):', err);
+      }
+    }
+
     const now = new Date();
-    const createdAt = shipment.createdAt;
-    const hoursSinceCreation = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60);
+    const hoursSinceCreation = (now.getTime() - shipment.createdAt.getTime()) / (1000 * 60 * 60);
 
     let refundAmount = 0;
     let refundNote = '';
@@ -310,25 +435,33 @@ export const cancelShipment = async (req: Request, res: Response, next: NextFunc
       await emailService.sendCancellationConfirmation(contactEmail, shipment, refundAmount);
     }
 
-    res.json({
-      success: true,
-      message: 'Shipment cancelled.',
-      refundAmount,
-      refundNote,
-    });
+    res.json({ success: true, message: 'Shipment cancelled.', refundAmount, refundNote });
   } catch (error) {
     next(error);
   }
 };
 
-// GET /api/shipments/my
+// ── GET /api/shipments/my ────────────────────────────────────────────────────
 export const getMyShipments = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = (req as any).user.userId;
-    const { page = 1, limit = 10, status } = req.query;
+    const { page = 1, limit = 10, status, search, dateFrom, dateTo } = req.query;
 
     const query: any = { userId };
-    if (status) query.status = status;
+    if (status && status !== 'all') query.status = status;
+    if (search) {
+      query.$or = [
+        { shipmentNumber: { $regex: search, $options: 'i' } },
+        { trackingNumber: { $regex: search, $options: 'i' } },
+        { 'shipper.city': { $regex: search, $options: 'i' } },
+        { 'recipient.city': { $regex: search, $options: 'i' } },
+      ];
+    }
+    if (dateFrom || dateTo) {
+      query.createdAt = {};
+      if (dateFrom) query.createdAt.$gte = new Date(dateFrom as string);
+      if (dateTo) query.createdAt.$lte = new Date(dateTo as string);
+    }
 
     const shipments = await Shipment.find(query)
       .sort({ createdAt: -1 })

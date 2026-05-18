@@ -130,3 +130,107 @@ export const addSavedAddress = async (req: Request, res: Response, next: NextFun
     next(error);
   }
 };
+
+// ── DELETE /api/auth/addresses/:addressId ────────────────────────────────────
+export const deleteSavedAddress = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await User.findById((req as any).user.userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
+    user.savedAddresses = user.savedAddresses.filter(
+      (a: any) => a._id.toString() !== req.params.addressId
+    );
+    await user.save();
+    res.json({ success: true, message: 'Address removed.', addresses: user.savedAddresses });
+  } catch (error) { next(error); }
+};
+
+// ── Packages ─────────────────────────────────────────────────────────────────
+export const getPackages = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await User.findById((req as any).user.userId);
+    res.json({ success: true, packages: user?.savedPackages || [] });
+  } catch (error) { next(error); }
+};
+
+export const addPackage = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await User.findById((req as any).user.userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
+    user.savedPackages.push(req.body);
+    await user.save();
+    res.json({ success: true, message: 'Package saved.', packages: user.savedPackages });
+  } catch (error) { next(error); }
+};
+
+export const deletePackage = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await User.findById((req as any).user.userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
+    user.savedPackages = user.savedPackages.filter(
+      (p: any) => p._id.toString() !== req.params.packageId
+    );
+    await user.save();
+    res.json({ success: true, message: 'Package removed.', packages: user.savedPackages });
+  } catch (error) { next(error); }
+};
+
+// ── Products ──────────────────────────────────────────────────────────────────
+export const getProducts = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await User.findById((req as any).user.userId);
+    res.json({ success: true, products: user?.savedProducts || [] });
+  } catch (error) { next(error); }
+};
+
+export const addProduct = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await User.findById((req as any).user.userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
+    user.savedProducts.push(req.body);
+    await user.save();
+    res.json({ success: true, message: 'Product saved.', products: user.savedProducts });
+  } catch (error) { next(error); }
+};
+
+export const deleteProduct = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await User.findById((req as any).user.userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
+    user.savedProducts = user.savedProducts.filter(
+      (p: any) => p._id.toString() !== req.params.productId
+    );
+    await user.save();
+    res.json({ success: true, message: 'Product removed.', products: user.savedProducts });
+  } catch (error) { next(error); }
+};
+
+// ── Tickets ───────────────────────────────────────────────────────────────────
+export const getTickets = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await User.findById((req as any).user.userId);
+    res.json({ success: true, tickets: user?.tickets || [] });
+  } catch (error) { next(error); }
+};
+
+export const createTicket = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const user = await User.findById((req as any).user.userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
+    user.tickets.push({ ...req.body, status: 'open' } as any);
+    await user.save();
+    res.json({ success: true, message: 'Ticket submitted.', tickets: user.tickets });
+  } catch (error) { next(error); }
+};
+
+// ── Update full profile (incl. company + address) ───────────────────────────
+export const updateFullProfile = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { firstName, lastName, phone, company, address } = req.body;
+    const user = await User.findByIdAndUpdate(
+      (req as any).user.userId,
+      { firstName, lastName, phone, company, address },
+      { new: true, runValidators: true }
+    );
+    res.json({ success: true, message: 'Profile updated.', user });
+  } catch (error) { next(error); }
+};

@@ -3,7 +3,7 @@ import logger from '../utils/logger';
 
 const connectDB = async (): Promise<void> => {
   try {
-    const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/pilot-courier';
+    const mongoUri = process.env.MONGODB_URI || 'mongodb://pilotcourier:goag4S44Q2zFJhRJ@ac-fqcm2vp-shard-00-00.ndlrea4.mongodb.net:27017,ac-fqcm2vp-shard-00-01.ndlrea4.mongodb.net:27017,ac-fqcm2vp-shard-00-02.ndlrea4.mongodb.net:27017/?ssl=true&replicaSet=atlas-yrtuxq-shard-0&authSource=admin&appName=pilotcourier';
     
     const conn = await mongoose.connect(mongoUri, {
       serverSelectionTimeoutMS: 5000,

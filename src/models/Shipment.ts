@@ -24,6 +24,7 @@ export interface IAddress {
   country: string;
   phone: string;
   email?: string;
+  isResidential?: boolean;
 }
 
 export interface IParcel {
@@ -35,7 +36,36 @@ export interface IParcel {
   dimensionUnit: 'cm' | 'in';
   description: string;
   declaredValue?: number;
+  insuranceAmount?: number;
+  specialHandling?: boolean;
   quantity: number;
+}
+
+export interface IPickupDetails {
+  method: 'schedule_pickup' | 'drop_off';
+  location?: string;
+  instructions?: string;
+  pickupDate?: string;
+  readyHour?: string;
+  readyMin?: string;
+  closeHour?: string;
+  closeMin?: string;
+}
+
+export interface ISpecialServices {
+  saturdayDelivery?: boolean;
+  signatureRequired?: boolean;
+  adultSignature?: boolean;
+  holdForPickup?: boolean;
+  insidePickup?: boolean;
+  insideDelivery?: boolean;
+  tailgatePickup?: boolean;
+  tailgateDelivery?: boolean;
+}
+
+export interface IReference {
+  referenceName: string;
+  referenceValue: string;
 }
 
 export interface IRate {
@@ -63,13 +93,16 @@ export interface IShipment extends Document {
   shipmentType: 'domestic' | 'international';
   selectedRate: IRate;
   allRates: IRate[];
+  pickupDetails?: IPickupDetails;
+  specialServices?: ISpecialServices;
+  references?: IReference[];
   status: ShipmentStatus;
   trackingNumber?: string;
   labelUrl?: string;
   labelBase64?: string;
-  netparcelShipmentId?: string;
+  netparcelOrderId?: number;
   payment: {
-    method: 'stripe' | 'paypal' | 'wise' | 'remitly';
+    method?: 'stripe' | 'paypal' | 'wise' | 'remitly';
     status: 'pending' | 'completed' | 'failed' | 'refunded';
     transactionId?: string;
     amount: number;
@@ -105,17 +138,20 @@ const AddressSchema = new Schema<IAddress>({
   country: { type: String, required: true },
   phone: { type: String, required: true },
   email: { type: String },
+  isResidential: { type: Boolean, default: false },
 });
 
 const ParcelSchema = new Schema<IParcel>({
   weight: { type: Number, required: true },
-  weightUnit: { type: String, enum: ['kg', 'lbs'], default: 'kg' },
+  weightUnit: { type: String, enum: ['kg', 'lbs'], default: 'lbs' },
   length: { type: Number, required: true },
   width: { type: Number, required: true },
   height: { type: Number, required: true },
-  dimensionUnit: { type: String, enum: ['cm', 'in'], default: 'cm' },
+  dimensionUnit: { type: String, enum: ['cm', 'in'], default: 'in' },
   description: { type: String, required: true },
   declaredValue: { type: Number },
+  insuranceAmount: { type: Number, default: 0 },
+  specialHandling: { type: Boolean, default: false },
   quantity: { type: Number, default: 1 },
 });
 
@@ -133,6 +169,33 @@ const RateSchema = new Schema<IRate>({
   isBestValue: { type: Boolean },
 });
 
+const PickupDetailsSchema = new Schema<IPickupDetails>({
+  method: { type: String, enum: ['schedule_pickup', 'drop_off'], default: 'drop_off' },
+  location: { type: String },
+  instructions: { type: String },
+  pickupDate: { type: String },
+  readyHour: { type: String },
+  readyMin: { type: String },
+  closeHour: { type: String },
+  closeMin: { type: String },
+}, { _id: false });
+
+const SpecialServicesSchema = new Schema<ISpecialServices>({
+  saturdayDelivery: { type: Boolean, default: false },
+  signatureRequired: { type: Boolean, default: false },
+  adultSignature: { type: Boolean, default: false },
+  holdForPickup: { type: Boolean, default: false },
+  insidePickup: { type: Boolean, default: false },
+  insideDelivery: { type: Boolean, default: false },
+  tailgatePickup: { type: Boolean, default: false },
+  tailgateDelivery: { type: Boolean, default: false },
+}, { _id: false });
+
+const ReferenceSchema = new Schema<IReference>({
+  referenceName: { type: String },
+  referenceValue: { type: String },
+}, { _id: false });
+
 const ShipmentSchema = new Schema<IShipment>(
   {
     shipmentNumber: { type: String, required: true, unique: true },
@@ -145,19 +208,22 @@ const ShipmentSchema = new Schema<IShipment>(
     shipmentType: { type: String, enum: ['domestic', 'international'], required: true },
     selectedRate: { type: RateSchema, required: true },
     allRates: [RateSchema],
+    pickupDetails: { type: PickupDetailsSchema },
+    specialServices: { type: SpecialServicesSchema },
+    references: [ReferenceSchema],
     status: {
       type: String,
       enum: [
         'quote', 'pending_payment', 'paid', 'label_generated',
         'pickup_scheduled', 'in_transit', 'out_for_delivery',
-        'delivered', 'cancelled', 'refund_requested', 'refunded'
+        'delivered', 'cancelled', 'refund_requested', 'refunded',
       ],
       default: 'quote',
     },
     trackingNumber: { type: String },
     labelUrl: { type: String },
     labelBase64: { type: String },
-    netparcelShipmentId: { type: String },
+    netparcelOrderId: { type: Number },
     payment: {
       method: { type: String, enum: ['stripe', 'paypal', 'wise', 'remitly'] },
       status: { type: String, enum: ['pending', 'completed', 'failed', 'refunded'], default: 'pending' },
