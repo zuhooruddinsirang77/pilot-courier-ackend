@@ -138,14 +138,18 @@ class NetParcelService {
 
   async getRates(data: NpRateRequest): Promise<NpRate[]> {
     try {
-      logger.info(`netParcel request to ${this.client.defaults.baseURL}/shipping_service`);
+      logger.info(`netParcel request to ${this.client.defaults.baseURL}/fetch_rates`);
       logger.info(`netParcel auth: user="${this.username}" pass="${this.password ? '***set***' : 'MISSING'}"`);
-      const response = await this.client.post('/shipping_service', data);
+      const response = await this.client.post('/fetch_rates', data);
       logger.info(`netParcel raw response status: ${response.status}`);
       logger.info(`netParcel raw response keys: ${Object.keys(response.data || {}).join(', ')}`);
       logger.info(`netParcel raw response: ${JSON.stringify(response.data).slice(0, 500)}`);
       const rates: NpRate[] = response.data?.rates || [];
+      const errors = response.data?.errors || [];
 
+      if (errors.length) {
+        errors.forEach((e: any) => logger.warn(`netParcel error: ${e.errorMessage}`));
+      }
       if (!rates.length) {
         logger.warn('No rates returned from netParcel for given shipment details');
       }

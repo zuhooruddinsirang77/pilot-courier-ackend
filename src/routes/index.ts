@@ -58,6 +58,81 @@ router.patch('/admin/shipments/:id/status', authenticate, requireAdmin, updateSh
 router.patch('/admin/shipments/:id/price', authenticate, requireAdmin, overridePrice);
 router.get('/admin/users', authenticate, requireAdmin, getAllUsers);
 
+// ── Geo lookups (proxy to netParcel) ─────────────────────────────────────────
+router.get('/geo/postal', async (req, res) => {
+  const { country, postal } = req.query as { country: string; postal: string };
+  if (!country || !postal) return res.status(400).json({ error: 'country and postal required' });
+  try {
+    const postalClean = postal.trim().replace(/\s+/g, '');
+    if (country.toUpperCase() === 'CA') {
+      const r = await fetch(`https://geocoder.ca/?postal=${encodeURIComponent(postalClean)}&json=1`);
+      if (!r.ok) return res.json({ city: '', province: '' });
+      const data = await r.json() as any;
+      const std = data?.standard;
+      return res.json({ city: std?.city || '', province: std?.prov || '' });
+    }
+    const r = await fetch(`https://api.zippopotam.us/${country.toLowerCase()}/${encodeURIComponent(postalClean)}`);
+    if (!r.ok) return res.json({ city: '', province: '' });
+    const data = await r.json() as any;
+    const place = data.places?.[0];
+    if (!place) return res.json({ city: '', province: '' });
+    res.json({
+      city: place['place name'],
+      province: place['state abbreviation'] || place['state'],
+    });
+  } catch {
+    res.json({ city: '', province: '' });
+  }
+});
+
+// Country ISO code → full name map for countriesnow API
+const COUNTRY_NAMES: Record<string, string> = {
+  CA: 'Canada', US: 'United States', GB: 'United Kingdom', AU: 'Australia',
+  DE: 'Germany', FR: 'France', IN: 'India', PK: 'Pakistan', CN: 'China',
+  MX: 'Mexico', JP: 'Japan', AE: 'United Arab Emirates', SA: 'Saudi Arabia',
+  NL: 'Netherlands', IT: 'Italy', ES: 'Spain', BR: 'Brazil', ZA: 'South Africa',
+  SG: 'Singapore', HK: 'Hong Kong',
+};
+
+router.get('/geo/provinces', async (req, res) => {
+  const { country } = req.query as { country: string };
+  if (!country) return res.status(400).json({ error: 'country required' });
+  const countryName = COUNTRY_NAMES[country.toUpperCase()];
+  if (!countryName) return res.json([]);
+  try {
+    const r = await fetch('https://countriesnow.space/api/v0.1/countries/states', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ country: countryName }),
+    });
+    const data = await r.json();
+    const states: { name: string; state_code: string }[] = data?.data?.states || [];
+    res.json(states.map(s => ({ label: s.name, value: s.state_code || s.name })));
+  } catch {
+    res.json([]);
+  }
+});
+
+router.get('/geo/cities', async (req, res) => {
+  const { country = 'CA', q = '' } = req.query as { country?: string; q?: string };
+  const countryName = COUNTRY_NAMES[(country as string).toUpperCase()] || 'Canada';
+  try {
+    const r = await fetch('https://countriesnow.space/api/v0.1/countries/cities', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ country: countryName }),
+    });
+    const data = await r.json();
+    const cities: string[] = data?.data || [];
+    const filtered = q
+      ? cities.filter((c: string) => c.toLowerCase().startsWith((q as string).toLowerCase())).slice(0, 50)
+      : cities.slice(0, 50);
+    res.json(filtered);
+  } catch {
+    res.json([]);
+  }
+});
+
 // ── Health ────────────────────────────────────────────────────────────────────
 router.get('/health', (_req, res) => res.json({ status: 'ok', service: 'Pilot Courier API', timestamp: new Date() }));
 

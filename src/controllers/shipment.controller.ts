@@ -11,13 +11,20 @@ const generateShipmentNumber = (): string => {
   return `${prefix}-${timestamp}-${random}`;
 };
 
-// netParcel total_price is in cents (e.g. "3400" = $34.00)
+// netParcel total_price: older API returns cents ("3400" = $34.00), newer returns dollars ("14.89")
 const parseNpPrice = (raw: string | number): number => {
   const n = typeof raw === 'string' ? parseFloat(raw) : raw;
-  return n > 1000 ? parseFloat((n / 100).toFixed(2)) : n;
+  if (isNaN(n)) return 0;
+  // Heuristic: if value > 500 and has no decimal, treat as cents
+  return (n > 500 && Number.isInteger(n)) ? parseFloat((n / 100).toFixed(2)) : parseFloat(n.toFixed(2));
 };
 
-const calcTransitDays = (minDate?: string, maxDate?: string): number => {
+const calcTransitDays = (transitDays?: string | number, minDate?: string, maxDate?: string): number => {
+  // Prefer direct transit_days from API
+  if (transitDays !== undefined && transitDays !== null) {
+    const d = parseInt(String(transitDays), 10);
+    if (!isNaN(d) && d > 0) return d;
+  }
   const dateStr = maxDate || minDate;
   if (!dateStr) return 5;
   const delivery = new Date(dateStr);
@@ -56,47 +63,63 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       description = 'Package',
       insuranceAmount = 0,
       specialHandling = false,
+      packagingType = 'My Packaging',
     } = req.body;
 
-    const uom: 'I' | 'M' = weightUnit === 'lbs' ? 'I' : 'M';
+    // Map frontend labels to valid netParcel packaging types
+    const VALID_PACKAGING = ['My Packaging', 'Envelope', 'Pak', 'Pallet'];
+    const resolvedPackaging = VALID_PACKAGING.includes(packagingType) ? packagingType : 'My Packaging';
+
+    const uom: 'I' | 'M' = (weightUnit === 'lbs' || dimensionUnit === 'in') ? 'I' : 'M';
+
+    // Clean inputs
+    const cleanPostal = (p: string) => (p || '').trim() || null;
+    const cleanProvince = (p: string) => {
+      const s = (p || '').trim();
+      if (!s) return null;
+      // If it's already a short code (≤3 chars) use as-is
+      if (s.length <= 3) return s.toUpperCase();
+      // Otherwise take the first word as the code (e.g. "NWFP Peshawar" → "NWFP")
+      return s.split(/\s+/)[0].toUpperCase();
+    };
 
     const ratePayload = {
       rate: {
         origin: {
           country: originCountry,
-          postal_code: originPostal,
-          province: originProvince,
-          city: originCity,
-          name: 'Shipper',
-          address1: '1 Main St',
-          phone: null,
+          postal_code: cleanPostal(originPostal),
+          province: cleanProvince(originProvince),
+          city: originCity || null,
+          name: null,
+          address1: null,
           address2: null,
           address3: null,
+          phone: null,
           fax: null,
-          address_type: originResidential ? 'residential' : 'business',
+          address_type: originResidential ? 'residential' : null,
           company_name: null,
         },
         destination: {
           country: destinationCountry,
-          postal_code: destinationPostal,
-          province: destinationProvince,
-          city: destinationCity,
-          name: 'Recipient',
-          address1: '1 Main St',
-          phone: null,
+          postal_code: cleanPostal(destinationPostal),
+          province: cleanProvince(destinationProvince),
+          city: destinationCity || null,
+          name: null,
+          address1: null,
           address2: null,
           address3: null,
+          phone: null,
           fax: null,
-          address_type: destinationResidential ? 'residential' : 'business',
+          address_type: destinationResidential ? 'residential' : null,
           company_name: null,
         },
         packaging_information: {
-          packaging_type: 'My Packaging',
+          packaging_type: resolvedPackaging,
           uom,
           packages: [{
-            length: parseFloat(length),
-            width: parseFloat(width),
-            height: parseFloat(height),
+            ...(parseFloat(length) > 0 && { length: parseFloat(length) }),
+            ...(parseFloat(width) > 0 && { width: parseFloat(width) }),
+            ...(parseFloat(height) > 0 && { height: parseFloat(height) }),
             weight: parseFloat(weight),
             insurance_amount: parseFloat(insuranceAmount) || 0,
             description: description || 'Package',
@@ -106,28 +129,41 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
       },
     };
 
+    logger.info('netParcel rate payload: ' + JSON.stringify(ratePayload));
+
     let npRates;
     try {
       npRates = await netparcelService.getRates(ratePayload);
       logger.info(`netParcel returned ${npRates.length} rates`);
       if (!npRates.length) {
-        logger.warn('No live rates returned, falling back to mock rates');
-        npRates = netparcelService.getMockRates(parseFloat(weight));
+        const isInternational = originCountry !== destinationCountry;
+        const message = isInternational
+          ? 'No international shipping rates are currently available for this route. Please contact support or try a domestic shipment.'
+          : 'No shipping rates available for the selected route. Please check the addresses and try again.';
+        return res.status(422).json({ success: false, message });
       }
-    } catch (err) {
-      logger.warn('Live netParcel rates failed, using mock rates:', err);
-      npRates = netparcelService.getMockRates(parseFloat(weight));
+    } catch (err: any) {
+      logger.error('netParcel getRates failed:', err?.message || err);
+      return res.status(502).json({ success: false, message: err?.message || 'Unable to fetch shipping rates. Please try again.' });
     }
 
-    const normalized = npRates.map((r) => ({
+    const normalized = npRates.map((r: any) => ({
       carrierId: r.service_code,
       carrierName: r.service_name.split(' ')[0],
       serviceCode: r.service_code,
       serviceName: r.service_name,
       totalCharge: parseNpPrice(r.total_price),
+      tariffPrice: parseNpPrice(r.tarriff_price || r.tariff_price || 0),
       currency: r.currency || 'CAD',
-      transitDays: calcTransitDays(r.min_delivery_date, r.max_delivery_date),
-      estimatedDelivery: (r.max_delivery_date || r.min_delivery_date || '').split(' ')[0],
+      transitDays: calcTransitDays(r.transit_days, r.min_delivery_date, r.max_delivery_date),
+      estimatedDelivery: (() => {
+        const d = r.max_delivery_date || r.min_delivery_date || '';
+        // Handle "21 May 2026" → parse to ISO, handle "2026-05-21" → use as-is
+        if (!d) return '';
+        const parsed = new Date(d);
+        return isNaN(parsed.getTime()) ? d : parsed.toISOString().split('T')[0];
+      })(),
+      mode: r.mode, // 1=Express, 2=Ground
     }));
 
     const rates = tagRates(normalized);
