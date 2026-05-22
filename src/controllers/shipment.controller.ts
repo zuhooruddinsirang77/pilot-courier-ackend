@@ -118,9 +118,9 @@ export const getRates = async (req: Request, res: Response, next: NextFunction) 
           packaging_type: resolvedPackaging,
           uom,
           packages: [{
-            ...(parseFloat(length) > 0 && { length: parseFloat(length) }),
-            ...(parseFloat(width) > 0 && { width: parseFloat(width) }),
-            ...(parseFloat(height) > 0 && { height: parseFloat(height) }),
+            length: parseFloat(length) || 0,
+            width: parseFloat(width) || 0,
+            height: parseFloat(height) || 0,
             weight: parseFloat(weight),
             insurance_amount: parseFloat(insuranceAmount) || 0,
             description: description || 'Package',
