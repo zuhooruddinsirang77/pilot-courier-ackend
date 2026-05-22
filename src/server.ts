@@ -18,7 +18,7 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://pilotcourier.com',
   'https://www.pilotcourier.com',
-  'https://pilot-courier.vercel.app/',
+  'https://pilot-courier.vercel.app',
   ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
   ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) : []),
 ];
