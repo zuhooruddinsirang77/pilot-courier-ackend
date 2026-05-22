@@ -14,12 +14,24 @@ const app = express();
 
 // ── Security ────────────────────────────────────────────────────────────────
 app.use(helmet());
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://pilotcourier.com',
+  'https://www.pilotcourier.com',
+  'https://pilot-courier.vercel.app/',
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+  ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) : []),
+];
+
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || 'http://localhost:3000',
-    'https://pilotcourier.com',
-    'https://www.pilotcourier.com',
-  ],
+  origin: (origin, callback) => {
+    // allow server-to-server / curl with no origin
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+      return callback(null, true);
+    }
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
