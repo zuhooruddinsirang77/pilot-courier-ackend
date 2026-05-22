@@ -102,7 +102,7 @@ router.get('/geo/provinces', async (req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ country: countryName }),
     });
-    const data = await r.json();
+    const data = await r.json() as any;
     const states: { name: string; state_code: string }[] = data?.data?.states || [];
     res.json(states.map(s => ({ label: s.name, value: s.state_code || s.name })));
   } catch {
@@ -119,7 +119,7 @@ router.get('/geo/cities', async (req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ country: countryName }),
     });
-    const data = await r.json();
+    const data = await r.json() as any;
     const cities: string[] = data?.data || [];
     const filtered = q
       ? cities.filter((c: string) => c.toLowerCase().startsWith((q as string).toLowerCase())).slice(0, 50)
