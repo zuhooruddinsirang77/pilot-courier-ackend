@@ -63,21 +63,18 @@ router.get('/geo/postal', async (req, res) => {
   const { country, postal } = req.query as { country: string; postal: string };
   if (!country || !postal) return res.status(400).json({ error: 'country and postal required' });
   try {
-    const postalClean = postal.trim().replace(/\s+/g, '');
-    if (country.toUpperCase() === 'CA') {
-      const r = await fetch(`https://geocoder.ca/?postal=${encodeURIComponent(postalClean)}&json=1`);
-      if (!r.ok) return res.json({ city: '', province: '' });
-      const data = await r.json() as any;
-      const std = data?.standard;
-      return res.json({ city: std?.city || '', province: std?.prov || '' });
-    }
-    const r = await fetch(`https://api.zippopotam.us/${country.toLowerCase()}/${encodeURIComponent(postalClean)}`);
+    const postalClean = postal.trim().replace(/\s+/g, '').toUpperCase();
+    // For CA use the FSA (first 3 chars) — zippopotam.us has full CA FSA coverage
+    const lookupCode = country.toUpperCase() === 'CA' ? postalClean.slice(0, 3) : postalClean;
+    const r = await fetch(`https://api.zippopotam.us/${country.toLowerCase()}/${encodeURIComponent(lookupCode)}`);
     if (!r.ok) return res.json({ city: '', province: '' });
     const data = await r.json() as any;
     const place = data.places?.[0];
     if (!place) return res.json({ city: '', province: '' });
+    const rawCity: string = place['place name'] || '';
+    const city = rawCity.replace(/\s*\(.*?\)\s*/g, '').trim();
     res.json({
-      city: place['place name'],
+      city,
       province: place['state abbreviation'] || place['state'],
     });
   } catch {

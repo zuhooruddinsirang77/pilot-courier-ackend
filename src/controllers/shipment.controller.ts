@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import mongoose from 'mongoose';
 import Shipment from '../models/Shipment';
 import netparcelService from '../services/netparcel.service';
 import emailService from '../services/email.service';
@@ -480,7 +481,7 @@ export const cancelShipment = async (req: Request, res: Response, next: NextFunc
 // ── GET /api/shipments/my ────────────────────────────────────────────────────
 export const getMyShipments = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const userId = (req as any).user.userId;
+    const userId = new mongoose.Types.ObjectId((req as any).user.userId);
     const { page = 1, limit = 10, status, search, dateFrom, dateTo } = req.query;
 
     const query: any = { userId };
@@ -496,7 +497,7 @@ export const getMyShipments = async (req: Request, res: Response, next: NextFunc
     if (dateFrom || dateTo) {
       query.createdAt = {};
       if (dateFrom) query.createdAt.$gte = new Date(dateFrom as string);
-      if (dateTo) query.createdAt.$lte = new Date(dateTo as string);
+      if (dateTo) { const end = new Date(dateTo as string); end.setHours(23, 59, 59, 999); query.createdAt.$lte = end; }
     }
 
     const shipments = await Shipment.find(query)
